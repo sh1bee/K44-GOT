@@ -116,4 +116,5 @@ const allImageUrls = [
     'xxx/pic115.jpg',
     // Thêm bao nhiêu URL tùy thích...
 ];
+
 export default allImageUrls;
