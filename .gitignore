@@ -1,0 +1,5 @@
+.parcel-cache/
+.parcel-cache/
+node_modules/
+dist/
+.parcel-cache/
