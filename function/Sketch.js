@@ -10,20 +10,21 @@ import GUI from "lil-gui";
 import gsap from "gsap";
 import allImageUrls from "../function/imageUrls.js";
 import { createCircleTexture, generateBgStars } from "../function/bg.js";
+import config from './config.js';
 
 const parameters = {
-  stars: 10000, // Có thể tăng lên một chút
-  size: 0.08,  // GIẢM kích thước đáng kể
-  starColor: '#aab8c2' // Một màu trắng xám nhẹ, không phải trắng tinh
+  stars: config.backgroundStars.count, // Sử dụng config
+  size: config.backgroundStars.size,    // Sử dụng config
+  starColor: '#aab8c2'
 };
 
 
 export default class Sketch {
 
   constructor(options) {
-    this.fadeRadius = 5.0;      // Bán kính để làm mờ các ảnh xung quanh (đơn vị 3D)
-    this.fadeOpacity = 0.05;     // Độ mờ mục tiêu (0.0 = trong suốt, 1.0 = rõ)
-    this.fadeDuration = 0.75;   // Thời gian cho hiệu ứng mờ (tính bằng giây)
+    this.fadeRadius = config.fadeRadius;
+    this.fadeOpacity = config.fadeOpacity;
+    this.fadeDuration = config.fadeDuration;
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(
       70, // fov
@@ -31,6 +32,16 @@ export default class Sketch {
       0.001,
       100
     );
+    this.textureLoader = new THREE.TextureLoader(); // Trình tải texture riêng
+    this.textureCache = new Map(); // Cache để lưu các texture đã tải
+    this.focusedImageData = null; // Lưu trữ dữ liệu của ảnh đang được focus
+    // UV mặc định cho một PlaneGeometry (0 -> 1)
+    this.defaultUVs = new Float32Array([
+        0, 1, // top-left
+        1, 1, // top-right
+        0, 0, // bottom-left
+        1, 0, // bottom-right
+    ]);
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
     this.scene.add(ambientLight);
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -45,7 +56,7 @@ export default class Sketch {
     const imageCount = allImageUrls.length;
     const gridSize = Math.ceil(Math.sqrt(imageCount)); // Tìm cạnh của hình vuông nhỏ nhất chứa đủ ảnh
     this.atlasGridSize = new THREE.Vector2(gridSize, gridSize);
-    this.atlasTileSize = 512; // Mỗi ô có kích thước ABCxABC pixels
+    this.atlasTileSize = config.atlasTileSize;
     this.atlasCanvas.width = this.atlasGridSize.x * this.atlasTileSize;
     this.atlasCanvas.height = this.atlasGridSize.y * this.atlasTileSize;
     this.imageLoader = new THREE.ImageLoader();
@@ -55,6 +66,9 @@ export default class Sketch {
     this.loadedImages = [];
 
     this.imageAspectRatios = [];
+    this.imageHitboxes = [];
+    this.isPanning = false;
+
 
     // === BẮT ĐẦU THAY ĐỔI ===
     // 1. TẠO TRÌNH TẢI TEXTURE
@@ -72,6 +86,7 @@ export default class Sketch {
         colorTail: new THREE.Color("#ffaa00"), // Cam vàng
         yVariance: 3,
         pathRandomness: 2,
+        trailParticleCount: config.galaxy.fishTrailCount,
     }).then(animator => this.fishAnimators.push(animator));
     
     // Tạo con cá thứ hai - y chang con thứ nhất nhưng đường bơi ngẫu nhiên khác
@@ -91,6 +106,7 @@ export default class Sketch {
         clickEffect: 'spin',
         yVariance: 1,
         pathRandomness: 1,
+        trailParticleCount: config.galaxy.fishTrailCount,
         spinType: 'pitch',
     }).then(animator => this.fishAnimators.push(animator));
     this.clock = new THREE.Clock();
@@ -106,7 +122,7 @@ export default class Sketch {
 
     });
     // this.renderer.autoClear = false;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(config.devicePixelRatio);
     this.renderer.setSize(this.width, this.height);
     this.renderer.setClearColor(0x000000, 1);
     this.renderer.physicallyCorrectLights = true;
@@ -133,14 +149,20 @@ export default class Sketch {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.time = 0;
     // 1. Tham số để bạn tùy chỉnh khoảng cách từ camera đến ảnh
-    this.cameraImageOffset = 1; // Giảm giá trị này để lại gần hơn, tăng để ra xa hơn.
-
+    this.cameraImageOffset = config.cameraImageOffset; 
+    this.cameraCenteringOffset = new THREE.Vector3(0.02, 0, 0.005); 
     // 2. Biến trạng thái: Lưu trữ mesh ảnh mà camera đang theo dõi.
     // Nếu là `null`, camera sẽ không theo dõi gì cả.
     this.followingImage = null;
+    this.currentImageIndex = -1;
+    
 
     // 3. Lắng nghe sự kiện khi người dùng bắt đầu tương tác với camera
-    this.listenForUserControl();
+
+    this.pointerDownPosition = new THREE.Vector2(); // Biến mới để lưu vị trí nhấn chuột
+    this.setupOrbitControlsListeners(); // Hàm mới xử lý sự kiện của OrbitControls
+    this.setupPointerEvents();          // Hàm mới xử lý click/drag
+
 
     this.dracoLoader = new DRACOLoader();
     this.dracoLoader.setDecoderPath(
@@ -155,11 +177,11 @@ export default class Sketch {
     // --- LỚP 1: LÕI TINH VÂN TRUNG TÂM (SÁNG, NÓNG, ĐA SẮC) ---
     const coreOptions = {
       shape: 'sphere',                         // Hình dạng: Khối cầu.
-      instance_count: 30000,                   // Số lượng hạt, tạo độ dày đặc cho lõi.
+      instance_count: config.galaxy.coreInstanceCount,                   // Số lượng hạt, tạo độ dày đặc cho lõi.
       min_radius: 1,                           // Bán kính nhỏ nhất của khối cầu.
       max_radius: 1.141,                       // Bán kính lớn nhất của khối cầu.
 
-      particle_size: 0.03,                     // Kích thước cơ bản của mỗi hạt.
+      particle_size: config.galaxy.coreParticle_size,                     // Kích thước cơ bản của mỗi hạt.
       particle_size_dispersion: 0.25,          // Độ phân tán kích thước, tạo sự đa dạng (hạt to, hạt nhỏ).
 
       rotation_speed: 0.015,                       // Tốc độ quay tổng thể của lớp này.
@@ -214,11 +236,11 @@ export default class Sketch {
     // --- LỚP 3: CÁC VỆT BỤI TỐI (TẠO CHIỀU SÂU VÀ TƯƠNG PHẢN) ---
     const dustLanesOptions = {
       shape: 'spiral',
-      instance_count: 15000,
+      instance_count: config.galaxy.dustInstanceCount,
       min_radius: 1.8,
       max_radius: 5.5,
 
-      particle_size: 0.02,
+      particle_size: config.galaxy.dustParticle_size,
       particle_size_dispersion: 0.1,
 
       rotation_speed: 0.08,
@@ -244,10 +266,10 @@ export default class Sketch {
     // Lớp này là hình cầu nên không bị ảnh hưởng bởi thay đổi làm "dẹp"
     const haloOptions = {
       shape: 'sphere',
-      instance_count: 10000,
+      instance_count: config.galaxy.haloInstanceCount,
       min_radius: 6.0,
       max_radius: 9.0,
-      particle_size: 0.015,
+      particle_size: config.galaxy.haloParticle_size,
       particle_size_dispersion: 0.1,
       rotation_speed: 0.05,
       rotation_dispersion: 0.01,
@@ -280,40 +302,113 @@ export default class Sketch {
     this.raycasterEvent()
     requestAnimationFrame(this.render.bind(this)); 
   }
-  moveCameraToRandomImage() {
-    if (!this.imageParticleMeshes || this.imageParticleMeshes.length === 0) {
-        return;
-    }
 
-    const randomIndex = Math.floor(Math.random() * this.imageParticleMeshes.length);
-    const randomImageMesh = this.imageParticleMeshes[randomIndex];
-
-    // KÍCH HOẠT CHẾ ĐỘ THEO DÕI
-    this.followingImage = randomImageMesh;
-    // === BẮT ĐẦU THAY ĐỔI ===
-    // ÁP DỤNG HIỆU ỨNG MỜ XUNG QUANH
-    this.applyProximityFade(randomImageMesh);
-    // === KẾT THÚC THAY ĐỔI ===
-
-    gsap.to(this.controls.target, {
-        duration: 1.5,
-        x: randomImageMesh.position.x,
-        y: randomImageMesh.position.y,
-        z: randomImageMesh.position.z,
-        ease: "power2.inOut",
-    });
-
-  }
-  listenForUserControl() {
+  setupOrbitControlsListeners() {
     this.controls.addEventListener('start', () => {
-        // 'start' event được kích hoạt khi người dùng bắt đầu kéo/zoom/xoay.
-        // Đây chính là lúc chúng ta cần ngắt chế độ theo dõi.
+        // Logic này của bạn đã rất tốt và được giữ lại
+        // Khi người dùng bắt đầu kéo, hủy theo dõi ảnh hiện tại
         if (this.followingImage) {
             this.followingImage = null;
             this.restoreAllImageOpacities();
+            if (this.focusedImageData) {
+                this.switchToLowRes(this.focusedImageData);
+                this.focusedImageData = null;
+            }
         }
     });
   }
+  // Thêm hàm này vào class Sketch (và xóa các hàm cũ)
+setupPointerEvents() {
+    // Lắng nghe sự kiện trên chính canvas của renderer
+    const domElement = this.renderer.domElement;
+
+    domElement.addEventListener('pointerdown', (event) => {
+        // 1. Ghi lại vị trí khi chuột được nhấn xuống
+        this.pointerDownPosition.set(event.clientX, event.clientY);
+    });
+
+    domElement.addEventListener('pointerup', (event) => {
+        // 2. Tính toán khoảng cách di chuyển
+        const deltaX = Math.abs(event.clientX - this.pointerDownPosition.x);
+        const deltaY = Math.abs(event.clientY - this.pointerDownPosition.y);
+        
+        // 3. Đặt một ngưỡng nhỏ (ví dụ: 5 pixel)
+        const clickThreshold = 5;
+
+        // 4. Nếu di chuyển ít hơn ngưỡng -> Coi đó là một cú CLICK
+        if (deltaX < clickThreshold && deltaY < clickThreshold) {
+            console.log("Phát hiện CLICK (di chuyển ít). Tiến hành raycast...");
+
+            // --- Toàn bộ logic raycast được đặt vào đây ---
+            this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            this.raycaster.setFromCamera(this.mouse, this.camera);
+
+            if (this.imageHitboxes && this.imageHitboxes.length > 0) {
+                const intersects = this.raycaster.intersectObjects(this.imageHitboxes);
+                
+                if (intersects.length > 0) {
+                    const clickedHitbox = intersects[0].object;
+                    const clickedIndex = clickedHitbox.userData.imageIndex;
+                    
+                    if (clickedIndex !== undefined) {
+                        console.log(`Raycaster trúng hitbox! Index: ${clickedIndex}`);
+                        this.focusOnImageByIndex(clickedIndex);
+                    }
+                } else {
+                     console.log("Click nhưng không trúng hitbox nào.");
+                }
+            }
+        } else {
+             console.log("Phát hiện DRAG (di chuyển nhiều). Bỏ qua raycast.");
+        }
+    });
+}
+  // <<< HÀM MỚI: Di chuyển camera đến một ảnh theo index >>>
+  focusOnImageByIndex(index) {
+    // Đảm bảo index nằm trong phạm vi hợp lệ
+    const imageCount = this.imageParticleData.length;
+    if (imageCount === 0) return; // Không có ảnh để focus
+
+    // Logic "quay vòng" cho index
+    const newIndex = (index + imageCount) % imageCount;
+
+    // Nếu ảnh đang focus không thay đổi thì không làm gì
+    if (newIndex === this.currentImageIndex) return;
+
+    // Chuyển ảnh cũ về chất lượng thấp
+    if (this.focusedImageData) {
+        this.switchToLowRes(this.focusedImageData);
+    }
+
+    // Lấy dữ liệu ảnh mới
+    const imageData = this.imageParticleData[newIndex];
+    const imageMesh = imageData.mesh;
+    
+    // Cập nhật trạng thái
+    this.switchToHighRes(imageData);
+    this.focusedImageData = imageData;
+    this.applyProximityFade(imageMesh);
+    this.followingImage = imageMesh;
+    this.currentImageIndex = newIndex; // Cập nhật index hiện tại
+  }
+  
+  // Sửa đổi hàm moveCameraToRandomImage để sử dụng hàm mới
+  moveCameraToRandomImage() {
+    if (this.imageParticleData.length === 0) return;
+    
+    let randomIndex;
+    // Đảm bảo không chọn lại ảnh hiện tại
+    do {
+        randomIndex = Math.floor(Math.random() * this.imageParticleData.length);
+    } while (this.imageParticleData.length > 1 && randomIndex === this.currentImageIndex);
+
+    this.focusOnImageByIndex(randomIndex);
+  }
+
+
+
 
   raycasterEvent(){
     let mesh = new THREE.Mesh(
@@ -495,6 +590,73 @@ export default class Sketch {
         frameX + finalFrameWidth / 2, // Căn giữa theo chiều ngang của khung
         textYPosition
     );
+  }// HÀM MỚI: Logic vẽ Polaroid cốt lõi
+  drawPolaroid(ctx, image, destX, destY, destWidth, destHeight) {
+    // --- CÁC THÔNG SỐ BẠN CÓ THỂ ĐIỀU CHỈNH ---
+    const framePadding = 8;
+    const captionHeight = 25;
+    const frameColor = 'rgba(255, 255, 245, 1)';
+    const shadowColor = 'rgba(0, 0, 0, 0.3)';
+    // ---------------------------------------------
+
+    ctx.clearRect(destX, destY, destWidth, destHeight);
+
+    const aspectRatio = image.width / image.height;
+    const maxImageDimension = destWidth - (framePadding * 2);
+    let scaledImageWidth, scaledImageHeight;
+
+    if (aspectRatio > 1) {
+        scaledImageWidth = maxImageDimension;
+        scaledImageHeight = maxImageDimension / aspectRatio;
+    } else {
+        scaledImageHeight = maxImageDimension;
+        scaledImageWidth = maxImageDimension * aspectRatio;
+    }
+
+    const finalFrameWidth = scaledImageWidth + (framePadding * 2);
+    const finalFrameHeight = scaledImageHeight + framePadding + captionHeight;
+    const frameX = destX + (destWidth - finalFrameWidth) / 2;
+    const frameY = destY + (destHeight - finalFrameHeight) / 2;
+
+    ctx.shadowColor = shadowColor;
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetX = 4;
+    ctx.shadowOffsetY = 4;
+    
+    ctx.fillStyle = frameColor;
+    ctx.fillRect(frameX, frameY, finalFrameWidth, finalFrameHeight);
+
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+
+    ctx.drawImage(
+        image,
+        frameX + framePadding,
+        frameY + framePadding,
+        scaledImageWidth,
+        scaledImageHeight
+    );
+
+    ctx.fillStyle = '#000';
+    ctx.font = 'italic 18px "Courier New", monospace';
+    ctx.textAlign = 'center';
+
+    const captionText = 'Kỷ niệm...';
+    const textYPosition = frameY + finalFrameHeight - (captionHeight / 2) + 2;
+
+    ctx.fillText(
+        captionText,
+        frameX + finalFrameWidth / 2,
+        textYPosition
+    );
+  }
+
+  // HÀM CŨ ĐƯỢC CẬP NHẬT: Giờ nó chỉ gọi hàm mới
+  drawImageToAtlas(image, x, y, width, height) {
+      // Hàm này giờ chỉ là một trình bao bọc (wrapper) đơn giản
+      this.drawPolaroid(this.atlasContext, image, x, y, width, height);
   }
 
   createMixedParticleSystem() {
@@ -502,7 +664,7 @@ export default class Sketch {
     // Create a new layer that mixes regular particles with image particles
    const mixedArmsOptions = {
       shape: 'spiral',
-      instance_count: 25000, // Reduced count since we're adding images
+      instance_count: config.galaxy.mixedArmsInstanceCount, // Reduced count since we're adding images
       min_radius: 2.0,
       max_radius: 6.0,
       particle_size: 0.03,
@@ -629,98 +791,180 @@ export default class Sketch {
  }
 
   getImageMesh(opts) {
-    const count = opts.instance_count;
-    
-    // Generate positions for spiral particles - each image gets one position
-    const validImageSlots = this.imageSlots.filter(slot => slot !== null);
-    
-    // Store references for animation
-    this.imageParticleMeshes = [];
-    this.imageParticleData = [];
-    
-    for (let r = 0; r < count; r++) {
-      // Use the same spiral generation logic as mainArmsOptions
-      let i_rand = 0.05 * (2*Math.random()-1), s = 0.02 * (2*Math.random()-1), a = 0.05 * (2*Math.random()-1);
-      let l = Math.pow(r / (count - 1), 0.5);
-      let c = 2 * Math.PI * 0.618033 * r;
-      let u = new THREE.Vector3(l*Math.cos(c)+i_rand, s, l*Math.sin(c)+a);
-      u.multiplyScalar(opts.max_radius - opts.min_radius).add(u.clone().normalize().multiplyScalar(opts.min_radius));
+      const count = opts.instance_count;
       
-      const random = Math.pow(Math.random(), 3);
-      const imageSlot = validImageSlots[r];
+      // Lấy các slot ảnh hợp lệ
+      const validImageSlots = this.imageSlots.filter(slot => slot !== null);
       
-      // Create individual geometry and material for each image
-      const geometry = new THREE.PlaneGeometry(1, 1);
+      // Khởi tạo lại các mảng (để đảm bảo sạch sẽ khi reload)
+      this.imageParticleMeshes = [];
+      this.imageParticleData = [];
       
-      // Create material with specific image slot
-      const material = new THREE.MeshBasicMaterial({
-        map: this.atlasTexture,
-        transparent: true,
-        opacity: opts.opacity,
-        side: THREE.DoubleSide,
-      });
-      
-      // Adjust UV coordinates to show only the specific image from atlas
-      const col = imageSlot.slotIndex % this.atlasGridSize.x;
-      const row = Math.floor(imageSlot.slotIndex / this.atlasGridSize.x);
-      
-      const uvAttribute = geometry.getAttribute('uv');
-      const uvArray = uvAttribute.array;
-      
-      // Calculate atlas UV bounds
-      const uMin = col / this.atlasGridSize.x;
-      const uMax = (col + 1) / this.atlasGridSize.x;
-      // Flip V coordinate since canvas Y is top-to-bottom, but UV is bottom-to-top
-      const vMin = 1.0 - (row + 1) / this.atlasGridSize.y;
-      const vMax = 1.0 - row / this.atlasGridSize.y;
-      
-      // Map UVs to the specific atlas slot (corrected mapping)
-      for (let i = 0; i < uvArray.length; i += 2) {
-        const u = uvArray[i]; // 0 or 1
-        const v = uvArray[i + 1]; // 0 or 1
+      // Vòng lặp để tạo từng mesh ảnh và hitbox tương ứng
+      for (let r = 0; r < count; r++) {
+        // 1. TÍNH TOÁN VỊ TRÍ BAN ĐẦU TRONG THIÊN HÀ
+        const random = Math.pow(Math.random(), 3);
+        const i_rand = 0.05 * (2 * Math.random() - 1);
+        const s = 0.02 * (2 * Math.random() - 1);
+        const a = 0.05 * (2 * Math.random() - 1);
+        const l = Math.pow(r / (count - 1), 0.5);
+        const c = 2 * Math.PI * 0.618033 * r;
+        const u = new THREE.Vector3(l * Math.cos(c) + i_rand, s, l * Math.sin(c) + a);
+        u.multiplyScalar(opts.max_radius - opts.min_radius).add(u.clone().normalize().multiplyScalar(opts.min_radius));
         
-        // Map from 0-1 to the specific atlas region
-        uvArray[i] = uMin + u * (uMax - uMin);
-        uvArray[i + 1] = vMin + v * (vMax - vMin);
+        const imageSlot = validImageSlots[r];
+        
+        // 2. TẠO MESH ẢNH
+        const geometry = new THREE.PlaneGeometry(1, 1);
+        const material = new THREE.MeshBasicMaterial({
+          map: this.atlasTexture,
+          transparent: true,
+          opacity: opts.opacity,
+          side: THREE.DoubleSide,
+        });
+        
+        // Điều chỉnh UV để hiển thị đúng ảnh từ atlas
+        const col = imageSlot.slotIndex % this.atlasGridSize.x;
+        const row = Math.floor(imageSlot.slotIndex / this.atlasGridSize.x);
+        const uvAttribute = geometry.getAttribute('uv');
+        const uvArray = uvAttribute.array;
+        const uMin = col / this.atlasGridSize.x;
+        const uMax = (col + 1) / this.atlasGridSize.x;
+        const vMin = 1.0 - (row + 1) / this.atlasGridSize.y;
+        const vMax = 1.0 - row / this.atlasGridSize.y;
+        for (let i = 0; i < uvArray.length; i += 2) {
+          const u_coord = uvArray[i];
+          const v_coord = uvArray[i + 1];
+          uvArray[i] = uMin + u_coord * (uMax - uMin);
+          uvArray[i + 1] = vMin + v_coord * (vMax - vMin);
+        }
+        uvAttribute.needsUpdate = true;
+        
+        const mesh = new THREE.Mesh(geometry, material);
+        
+        // 3. ĐẶT VỊ TRÍ, HƯỚNG VÀ KÍCH THƯỚC CHO MESH ẢNH
+        mesh.position.set(u.x, u.y, u.z);
+        const direction = new THREE.Vector3(u.x, u.y, u.z).normalize();
+        mesh.lookAt(mesh.position.clone().add(direction));
+        
+        const scale = opts.particle_size * (1.0 + opts.particle_size_dispersion * random);
+        const aspectRatio = imageSlot.aspectRatio;
+        const finalScale = new THREE.Vector3();
+        if (aspectRatio > 1.0) { // Ảnh rộng
+            finalScale.set(scale * aspectRatio * 0.8, scale, 1);
+        } else { // Ảnh cao hoặc vuông
+            finalScale.set(scale, scale / aspectRatio * 0.8, 1);
+        }
+        mesh.scale.copy(finalScale);
+        
+        // 4. TẠO HITBOX TƯƠNG ỨNG
+        const hitboxScaleMultiplier = 1.7; // Vùng click lớn hơn 30%
+        const hitboxGeometry = new THREE.PlaneGeometry(1, 1);
+        const hitboxMaterial = new THREE.MeshBasicMaterial({
+            transparent: true, // Tắt trong suốt
+            opacity: 0,
+            color: 0x00ff00,      // Màu xanh lá cây để dễ thấy
+            //wireframe: true,      // Hiển thị dạng lưới để không che mất ảnh
+            side: THREE.DoubleSide
+        });
+        const hitbox = new THREE.Mesh(hitboxGeometry, hitboxMaterial);
+        
+        // Đặt hitbox trùng vị trí và hướng với ảnh
+        hitbox.position.copy(mesh.position);
+        hitbox.quaternion.copy(mesh.quaternion);
+        
+        // Scale hitbox để nó lớn hơn ảnh nhưng vẫn giữ đúng tỷ lệ
+        hitbox.scale.set(
+            finalScale.x * hitboxScaleMultiplier,
+            finalScale.y * hitboxScaleMultiplier,
+            1
+        );
+        
+        // Gán index vào hitbox và thêm vào scene
+        hitbox.userData.imageIndex = r; 
+        this.imageHitboxes.push(hitbox);
+        this.scene.add(hitbox);
+        
+        // 5. LƯU TRỮ DỮ LIỆU
+        this.imageParticleData.push({
+          random: random,
+          aspectRatio: imageSlot.aspectRatio,
+          instanceID: imageSlot.slotIndex,
+          basePosition: new THREE.Vector3(u.x, u.y, u.z),
+          mesh: mesh,
+          hitbox: hitbox,
+          url: imageSlot.url,
+          originalUVs: new Float32Array(uvArray),
+          isHighRes: false
+        });
+        
+        this.imageParticleMeshes.push(mesh);
+        this.scene.add(mesh);
       }
-      uvAttribute.needsUpdate = true;
-      
-      // Create mesh
-      const mesh = new THREE.Mesh(geometry, material);
-      
-      // Set initial position
-      mesh.position.set(u.x, u.y, u.z);
-      
-      // Make image face outwards from galaxy center
-      const direction = new THREE.Vector3(u.x, u.y, u.z).normalize();
-      mesh.lookAt(mesh.position.clone().add(direction));
-      
-      // Apply size scaling based on aspect ratio
-      const scale = opts.particle_size * (1.0 + opts.particle_size_dispersion * random);
-      const aspectRatio = imageSlot.aspectRatio;
-      
-      if (aspectRatio > 1.0) {
-        // Wide image
-        mesh.scale.set(scale * aspectRatio * 0.8, scale, scale);
-      } else {
-        // Tall image  
-        mesh.scale.set(scale, scale / aspectRatio * 0.8, scale);
+  }
+
+  /**
+   * Chuyển một ảnh sang phiên bản chất lượng cao BẰNG CÁCH TẠO CANVAS MỚI.
+   * @param {object} imageData - Đối tượng dữ liệu từ mảng this.imageParticleData
+   */
+  async switchToHighRes(imageData) {
+    if (!imageData || imageData.isHighRes) return;
+
+    const { mesh, url } = imageData;
+    let highResCompositeTexture;
+
+    // 1. Kiểm tra cache
+    if (this.textureCache.has(url)) {
+      highResCompositeTexture = this.textureCache.get(url);
+    } else {
+      // 2. Nếu không có trong cache, tải ảnh và vẽ lên canvas mới
+      try {
+        const highResImage = await this.imageLoader.loadAsync(url);
+        
+        // Tạo canvas tạm thời với độ phân giải cao hơn
+        const tempCanvas = document.createElement('canvas');
+        const tempCtx = tempCanvas.getContext('2d');
+        const highResSize = 2048; // Kích thước texture chất lượng cao, có thể là 512 hoặc 1024
+        tempCanvas.width = highResSize;
+        tempCanvas.height = highResSize;
+
+        // Sử dụng hàm vẽ Polaroid đã tái cấu trúc
+        this.drawPolaroid(tempCtx, highResImage, 0, 0, highResSize, highResSize);
+
+        // Tạo texture từ canvas mới này
+        highResCompositeTexture = new THREE.CanvasTexture(tempCanvas);
+        highResCompositeTexture.encoding = THREE.sRGBEncoding;
+        highResCompositeTexture.needsUpdate = true; // Rất quan trọng!
+        highResCompositeTexture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+
+        // Lưu texture ĐÃ ĐƯỢC TỔ HỢP vào cache
+        this.textureCache.set(url, highResCompositeTexture);
+
+      } catch (error) {
+        console.error("Không thể tải và xử lý ảnh chất lượng cao:", url, error);
+        return; // Dừng lại nếu có lỗi
       }
-      
-      // Store data for animation
-      this.imageParticleData.push({
-        random: random,
-        aspectRatio: aspectRatio,
-        instanceID: imageSlot.slotIndex,
-        basePosition: new THREE.Vector3(u.x, u.y, u.z),
-        mesh: mesh
-      });
-      
-      this.imageParticleMeshes.push(mesh);
-      this.scene.add(mesh);
-      // Don't add MeshBasicMaterial to materials array since it doesn't have _Time uniform
     }
-    
+
+    // 3. Áp dụng texture và UV mới
+    mesh.material.map = highResCompositeTexture;
+    mesh.geometry.attributes.uv.copyArray(this.defaultUVs);
+    mesh.geometry.attributes.uv.needsUpdate = true;
+    mesh.material.needsUpdate = true;
+    imageData.isHighRes = true;
+  }
+
+  switchToLowRes(imageData) {
+    if (!imageData || !imageData.isHighRes) return;
+
+    const { mesh, originalUVs } = imageData;
+
+    // 1. Khôi phục texture atlas và UV gốc
+    mesh.material.map = this.atlasTexture;
+    mesh.geometry.attributes.uv.copyArray(originalUVs);
+    mesh.geometry.attributes.uv.needsUpdate = true;
+    mesh.material.needsUpdate = true;
+    imageData.isHighRes = false;
   }
 
   updateImageParticles(elapsedTime) {
@@ -743,6 +987,7 @@ export default class Sketch {
     for (let i = 0; i < this.imageParticleData.length; i++) {
       const data = this.imageParticleData[i];
       const mesh = data.mesh;
+      const hitbox = data.hitbox; 
       let worldPos = data.basePosition.clone();
       
       // Apply spiral twist effect (same as in vertex shader)
@@ -781,10 +1026,12 @@ export default class Sketch {
       
       // Update mesh position
       mesh.position.copy(worldPos);
+      hitbox.position.copy(worldPos);
       
       // Make images face outwards from galaxy center
       const direction = worldPos.clone().normalize();
       mesh.lookAt(mesh.position.clone().add(direction));
+      hitbox.quaternion.copy(mesh.quaternion);
       
       // Apply size scaling
       const scale = opts.particle_size * (1.0 + opts.particle_size_dispersion * data.random);
@@ -795,6 +1042,7 @@ export default class Sketch {
       } else {
         mesh.scale.set(scale, scale / aspectRatio * 0.8, scale);
       }
+      hitbox.scale.copy(mesh.scale);
     }
   }
 
@@ -901,10 +1149,6 @@ export default class Sketch {
     const delta = time - this.lastTime;
     this.lastTime = time;
     const elapsedTime = time;
-    //-- Bắt đầu debug delta ---
-    if (Math.random() < 0.1) {
-         console.log("Manual Delta:", delta);
-    }
     this.bgStars.rotation.y = -elapsedTime * 0.005;
     // === BẮT ĐẦU THAY ĐỔI: LOGIC CROSS-FADE LOD ===
     if (this.coreMesh && this.impostorMesh) {
@@ -951,28 +1195,27 @@ export default class Sketch {
       });
     }
     
+// --- KHỐI LOGIC THEO DÕI MỚI VÀ CẢI TIẾN ---
     if (this.followingImage) {
         const targetMesh = this.followingImage;
 
         const targetPosition = new THREE.Vector3();
         targetMesh.getWorldPosition(targetPosition);
 
-        // --- SỬA LỖI Ở ĐÂY ---
-        // Cập nhật cả mục tiêu của OrbitControls để nó "khóa" vào ảnh
-        this.controls.target.copy(targetPosition);
-        // -----------------------
-
         const normal = new THREE.Vector3(0, 0, 1);
         normal.applyQuaternion(targetMesh.quaternion);
+        let cameraIdealPosition = targetPosition.clone().add(normal.multiplyScalar(this.cameraImageOffset));
 
-        const cameraDestination = targetPosition.clone().add(normal.multiplyScalar(this.cameraImageOffset));
-
-        // Di chuyển camera mượt mà
-        this.camera.position.lerp(cameraDestination, 0.05);
-
-        // Dòng lookAt này giờ chỉ mang tính hỗ trợ, vì controls.target đã là nguồn chính
-        this.camera.lookAt(targetPosition);
+        // <<< THÊM DÒNG NÀY ĐỂ ÁP DỤNG HIỆU CHỈNH >>>
+        // Chúng ta cần xoay vector hiệu chỉnh theo hướng của camera để nó luôn đẩy "ngang" màn hình.
+        const offset = this.cameraCenteringOffset.clone().applyQuaternion(this.camera.quaternion);
+        cameraIdealPosition.add(offset);
+        // 3. Di chuyển mượt mà cả camera và mục tiêu của controls
+        this.camera.position.lerp(cameraIdealPosition, 0.05); 
+        this.controls.target.lerp(targetPosition, 0.05);
     }
+    // --- KẾT THÚC KHỐI LOGIC MỚI ---
+    
     const distanceToCore = this.camera.position.length();
     const lowQuality = distanceToCore < 10 ? 1.0 : 0.0;
     this.materials.forEach(m => {
@@ -986,7 +1229,6 @@ export default class Sketch {
 
     // Cập nhật OrbitControls sau khi đã điều chỉnh camera và target
     this.controls.update();
-
     requestAnimationFrame(this.render.bind(this)); 
     this.renderer.render(this.scene, this.camera);
   }

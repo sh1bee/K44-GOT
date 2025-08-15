@@ -1,0 +1,177 @@
+/* --- CÁC KIỂU CƠ BẢN --- */
+* {
+    margin: 0;
+    padding: 0;
+}
+canvas {
+    display: block;
+}
+#container {
+    width: 100vw;
+    height: 100vh;
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: -1;
+}
+
+/* --- CONTAINER CHUNG CHO CÁC NÚT --- */
+#controls-container {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 100;
+    display: flex;       /* <-- Dùng Flexbox để sắp xếp */
+    align-items: center; /* <-- Căn giữa các nút theo chiều dọc */
+    gap: 20px;           /* <-- Khoảng cách giữa các nút */
+}
+
+
+/* === NÚT RANDOM (Uiverse) - ĐÃ SỬA LẠI === */
+/* Bỏ position: absolute và các thuộc tính căn giữa */
+.btn {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 13rem;
+  overflow: hidden;
+  height: 3rem;
+  background-size: 300% 300%;
+  cursor: pointer;
+  backdrop-filter: blur(1rem);
+  border-radius: 5rem;
+  transition: 0.5s;
+  animation: gradient_301 5s ease infinite;
+  border: double 4px transparent;
+  background-image: linear-gradient(#212121, #212121),
+    linear-gradient(
+      137.48deg,
+      #004c4c 10%,
+      #006666 45%,
+      #008080 67%,
+      #66b2b2 87%
+    );
+  background-origin: border-box;
+  background-clip: content-box, border-box;
+  position: relative; /* Đổi thành relative để các phần tử con hoạt động đúng */
+}
+
+/* Các phần tử con của nút RANDOM giữ nguyên */
+.btn #container-stars {
+  position: absolute;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  transition: 0.5s;
+  backdrop-filter: blur(1rem);
+  border-radius: 5rem;
+}
+.btn strong {
+  z-index: 2;
+  font-family: "Avalors Personal Use"; /* Cần đảm bảo font này được import */
+  font-size: 12px;
+  letter-spacing: 5px;
+  color: #ffffff;
+  text-shadow: 0 0 4px white;
+}
+.btn #glow {
+  position: absolute;
+  display: flex;
+  width: 12rem;
+}
+.btn .circle {
+  width: 100%;
+  height: 30px;
+  filter: blur(2rem);
+  animation: pulse_3011 4s infinite;
+  z-index: -1;
+}
+.btn .circle:nth-of-type(1) { background: rgba(254, 83, 186, 0.636); }
+.btn .circle:nth-of-type(2) { background: rgba(142, 81, 234, 0.704); }
+.btn:hover #container-stars { z-index: 1; background-color: #212121; }
+.btn:hover { transform: scale(1.1); }
+.btn:active {
+  border: double 4px #fe53bb;
+  background-origin: border-box;
+  background-clip: content-box, border-box;
+  animation: none;
+}
+.btn:active .circle { background: #fe53bb; }
+.btn #stars { position: relative; background: transparent; width: 200rem; height: 200rem; }
+.btn #stars::after {
+  content: "";
+  position: absolute;
+  top: -10rem;
+  left: -100rem;
+  width: 100%;
+  height: 100%;
+  animation: animStarRotate 90s linear infinite;
+  background-image: radial-gradient(#ffffff 1px, transparent 1%);
+  background-size: 50px 50px;
+}
+.btn #stars::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -50%;
+  width: 170%;
+  height: 500%;
+  animation: animStar 60s linear infinite;
+  background-image: radial-gradient(#ffffff 1px, transparent 1%);
+  background-size: 50px 50px;
+  opacity: 0.5;
+}
+
+
+/* === NÚT < > (nav-btn) === */
+.nav-btn {
+  background-color: rgba(20, 20, 20, 0.7);
+  border: 2px solid #00c7a3;
+  color: #00c7a3;
+  border-radius: 50%;
+  width: 50px;
+  height: 50px;
+  font-size: 24px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding-bottom: 4px;
+  backdrop-filter: blur(5px);
+}
+.nav-btn:hover {
+  background-color: #00c7a3;
+  color: black;
+  transform: scale(1.1);
+}
+
+/* --- CÁC KEYFRAMES GIỮ NGUYÊN --- */
+@keyframes animStar { from { transform: translateY(0); } to { transform: translateY(-135rem); } }
+@keyframes animStarRotate { from { transform: rotate(360deg); } to { transform: rotate(0); } }
+@keyframes gradient_301 { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+@keyframes pulse_3011 { 0% { transform: scale(0.75); box-shadow: 0 0 0 0 rgba(0, 0, 0, 0.7); } 70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(0, 0, 0, 0); } 100% { transform: scale(0.75); box-shadow: 0 0 0 0 rgba(0, 0, 0, 0); } }
+
+/* --- LỚP PHỦ XOAY MÀN HÌNH --- */
+#orientation-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.9);
+    color: white; z-index: 9999;
+    justify-content: center; align-items: center; text-align: center;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+}
+#orientation-overlay .message { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+#orientation-overlay .icon { width: 80px; height: 80px; margin-bottom: 20px; animation: rotate-animation 1.5s infinite ease-in-out; }
+@keyframes rotate-animation { 0% { transform: rotate(0deg); } 50% { transform: rotate(-90deg); } 100% { transform: rotate(-90deg); } }
+
+/* Media Query chỉ để HIỂN THỊ lớp phủ */
+@media (hover: none) and (orientation: portrait) {
+    #orientation-overlay {
+        display: flex;
+    }
+}

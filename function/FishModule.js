@@ -16,6 +16,7 @@ export function createFish(scene, camera, options = {}) {
         colorTail: new THREE.Color(0xff8001),
         clickEffect: 'speedBoost',
         spinDirection: 1,
+        trailParticleCount: 500, // Giá trị mặc định
         spinType: 'roll', // 'roll' (dọc) hoặc 'pitch' (ngang)
     };
     const finalOptions = { ...defaults, ...options };
@@ -212,7 +213,7 @@ export function createFish(scene, camera, options = {}) {
                 window.addEventListener('mousedown', onMouseDown);
                 
                 let trailParticlesData = [], currentTrailParticleIndex = 0;
-                const TRAIL_PARTICLE_COUNT = 500;
+                const TRAIL_PARTICLE_COUNT = finalOptions.trailParticleCount;;
                 const trailGeometry = new THREE.BufferGeometry();
                 const trailPositions = new Float32Array(TRAIL_PARTICLE_COUNT * 3);
                 const trailAlphas = new Float32Array(TRAIL_PARTICLE_COUNT);
@@ -267,14 +268,24 @@ export function createFish(scene, camera, options = {}) {
                     }
                     const tail_t = ((fishState.customTime * 0.1) + (-0.5 * fishState.fishLengthRatio) + 1.0) % 1.0;
                     const tailPosition = fishState.curve.getPointAt(tail_t);
+                    if (!trailParticlesData[currentTrailParticleIndex]) {
+                        console.error("LỖI SẮP XẢY RA: trailParticlesData tại index này là undefined!");
+                        console.error(`Giá trị hiện tại: currentTrailParticleIndex=${currentTrailParticleIndex}, TRAIL_PARTICLE_COUNT=${TRAIL_PARTICLE_COUNT}`);
+                    }
                     for (let i = 0; i < 3; i++) {
+                        // Lấy index hiện tại để sử dụng
                         const pIndex = currentTrailParticleIndex;
+
+                        // Gán dữ liệu cho hạt tại index đó
                         trailParticlesData[pIndex].lifetime = THREE.MathUtils.randFloat(1.0, 2.5);
                         trailParticlesData[pIndex].initialLifetime = trailParticlesData[pIndex].lifetime;
+                        
                         const spread = 0.2 * finalOptions.scale;
                         trailPositions[pIndex * 3 + 0] = tailPosition.x + THREE.MathUtils.randFloatSpread(spread);
                         trailPositions[pIndex * 3 + 1] = tailPosition.y + THREE.MathUtils.randFloatSpread(spread);
                         trailPositions[pIndex * 3 + 2] = tailPosition.z + THREE.MathUtils.randFloatSpread(spread);
+
+                        // Cực kỳ quan trọng: Cập nhật và "quay vòng" index cho hạt TIẾP THEO
                         currentTrailParticleIndex = (currentTrailParticleIndex + 1) % TRAIL_PARTICLE_COUNT;
                     }
                     fishState.trail.geometry.attributes.position.needsUpdate = true;
